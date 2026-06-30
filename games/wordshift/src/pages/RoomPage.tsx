@@ -4,7 +4,7 @@ import { Button } from "../components/Button";
 import { Card } from "../components/Card";
 import { PlayerList } from "../components/PlayerList";
 import { QRCodeBox } from "../components/QRCodeBox";
-import { RecentWords } from "../components/RecentWords";
+import { RecentWords, type RecentWord } from "../components/RecentWords";
 import { RoomCodeBadge } from "../components/RoomCodeBadge";
 import { Timer } from "../components/Timer";
 import { WordInput } from "../components/WordInput";
@@ -14,6 +14,11 @@ import { useRoomData } from "../hooks/useRoomData";
 import { endGame, startGame, submitWord } from "../services/rooms";
 import { getStoredRoomPlayerId } from "../utils/playerIdentity";
 import { getRoomTimeRemainingSeconds } from "../utils/time";
+import { normalizeWord } from "../utils/wordRules";
+
+type OptimisticWord = RecentWord & {
+  status: "pending" | "failed";
+};
 
 export function RoomPage() {
   const { roomId } = useParams();
@@ -25,13 +30,18 @@ export function RoomPage() {
   const { error: roomError, room, players, playersLoaded, playerWordsByPlayer } = useRoomData(roomId, candidatePlayerId);
   const [message, setMessage] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
+  const [optimisticWords, setOptimisticWords] = useState<OptimisticWord[]>([]);
 
   const currentPlayer = useMemo(
     () => players.find((player) => player.playerId === storedPlayerId) ?? players.find((player) => player.playerId === user?.uid),
     [players, storedPlayerId, user?.uid],
   );
   const currentPlayerId = currentPlayer?.playerId ?? candidatePlayerId;
-  const playerWords = currentPlayerId ? (playerWordsByPlayer[currentPlayerId] ?? []) : [];
+  const playerWords = useMemo(() => (currentPlayerId ? (playerWordsByPlayer[currentPlayerId] ?? []) : []), [currentPlayerId, playerWordsByPlayer]);
+  const visibleWords = useMemo<RecentWord[]>(() => {
+    const acceptedWords = new Set(playerWords.map((entry) => entry.word));
+    return [...playerWords, ...optimisticWords.filter((entry) => !acceptedWords.has(entry.word))];
+  }, [optimisticWords, playerWords]);
   const isHost = Boolean(currentPlayer && room?.hostId === currentPlayer.playerId);
   const joinLink = `${window.location.origin}/join/${roomId ?? ""}`;
   const whatsAppShareLink = `https://wa.me/?text=${encodeURIComponent(`Join my HeyJustPlay WordShift room: ${joinLink}`)}`;
@@ -56,6 +66,12 @@ export function RoomPage() {
     const interval = window.setInterval(() => setNow(Date.now()), 500);
     return () => window.clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (!optimisticWords.length) return;
+    const acceptedWords = new Set(playerWords.map((entry) => entry.word));
+    setOptimisticWords((entries) => entries.filter((entry) => !acceptedWords.has(entry.word)));
+  }, [optimisticWords.length, playerWords]);
 
   useEffect(() => {
     if (!roomId) return;
@@ -141,7 +157,7 @@ export function RoomPage() {
         </Card>
         <Card className="sm:col-span-1">
           <p className="text-xs font-bold uppercase text-slate-400">Your words</p>
-          <p className="mt-1 font-mono text-3xl font-black text-white">{playerWords.length}</p>
+          <p className="mt-1 font-mono text-3xl font-black text-white">{visibleWords.length}</p>
         </Card>
         <Card className="sm:col-span-1">
           <p className="text-xs font-bold uppercase text-slate-400">Mode</p>
@@ -154,6 +170,7 @@ export function RoomPage() {
         <WordInput
           disabled={wordInputDisabled}
           onSubmit={async (word) => {
+            const normalizedWord = normalizeWord(word);
             setMessage(null);
             if (!currentPlayer) {
               setMessage("Join this room before submitting words.");
@@ -163,10 +180,14 @@ export function RoomPage() {
               setMessage(`Cannot submit because ${inputDisabledReason}.`);
               return;
             }
+            setOptimisticWords((entries) => [...entries.filter((entry) => entry.word !== normalizedWord), { word: normalizedWord, status: "pending" }]);
             try {
               await submitWord(roomId, currentPlayer, room, playerWords, word);
               setMessage("Accepted.");
             } catch (error) {
+              setOptimisticWords((entries) =>
+                entries.map((entry) => (entry.word === normalizedWord ? { ...entry, status: "failed" } : entry)),
+              );
               setMessage(error instanceof Error ? error.message : "Could not submit word.");
             }
           }}
@@ -197,7 +218,7 @@ export function RoomPage() {
           <h2 className="text-xl font-black text-white">Recent Words</h2>
           <span className="text-xs font-bold uppercase text-slate-400">Only yours</span>
         </div>
-        <RecentWords words={playerWords} />
+        <RecentWords words={visibleWords} />
       </Card>
     </div>
   );

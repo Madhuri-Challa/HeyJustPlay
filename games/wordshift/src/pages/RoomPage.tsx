@@ -12,23 +12,49 @@ import { WordDefinitionCard } from "../components/WordDefinitionCard";
 import { useAnonymousAuth } from "../hooks/useAnonymousAuth";
 import { useRoomData } from "../hooks/useRoomData";
 import { endGame, startGame, submitWord } from "../services/rooms";
+import { getStoredRoomPlayerId } from "../utils/playerIdentity";
+import { getRoomTimeRemainingSeconds } from "../utils/time";
 
 export function RoomPage() {
   const { roomId } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAnonymousAuth();
-  const { error: roomError, room, players, playerWords } = useRoomData(roomId, user?.uid);
+  const storedPlayerId = useMemo(() => getStoredRoomPlayerId(roomId), [roomId]);
+  const candidatePlayerId = storedPlayerId ?? user?.uid;
+  const { error: roomError, room, players, playerWordsByPlayer } = useRoomData(roomId, candidatePlayerId);
   const [message, setMessage] = useState<string | null>(null);
+  const [now, setNow] = useState(Date.now());
 
-  const currentPlayer = useMemo(() => players.find((player) => player.playerId === user?.uid), [players, user?.uid]);
-  const isHost = Boolean(user && room?.hostId === user.uid);
+  const currentPlayer = useMemo(
+    () => players.find((player) => player.playerId === storedPlayerId) ?? players.find((player) => player.playerId === user?.uid),
+    [players, storedPlayerId, user?.uid],
+  );
+  const currentPlayerId = currentPlayer?.playerId ?? candidatePlayerId;
+  const playerWords = currentPlayerId ? (playerWordsByPlayer[currentPlayerId] ?? []) : [];
+  const isHost = Boolean(currentPlayer && room?.hostId === currentPlayer.playerId);
   const joinLink = `${window.location.origin}/join/${roomId ?? ""}`;
   const latestDefinedWord = [...playerWords].reverse().find((entry) => entry.dictionary)?.dictionary;
+  const timeRemainingSeconds = room ? getRoomTimeRemainingSeconds(room) : 0;
+  const inputDisabledReason = !room
+    ? "room is not loaded"
+    : !currentPlayer
+    ? "player is not joined"
+    : room.status === "ENDED"
+      ? "room is completed"
+      : room.status === "ACTIVE" && timeRemainingSeconds <= 0
+        ? "timer has ended"
+        : null;
+  const wordInputDisabled = Boolean(inputDisabledReason);
 
   const handleExpire = useCallback(() => {
     if (roomId && room?.status === "ACTIVE") void endGame(roomId);
   }, [room?.status, roomId]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow(Date.now()), 500);
+    return () => window.clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     if (!roomId) return;
@@ -111,11 +137,15 @@ export function RoomPage() {
 
       <Card className="grid gap-4">
         <WordInput
-          disabled={!currentPlayer}
+          disabled={wordInputDisabled}
           onSubmit={async (word) => {
             setMessage(null);
             if (!currentPlayer) {
               setMessage("Join this room before submitting words.");
+              return;
+            }
+            if (inputDisabledReason) {
+              setMessage(`Cannot submit because ${inputDisabledReason}.`);
               return;
             }
             try {
@@ -126,9 +156,26 @@ export function RoomPage() {
             }
           }}
         />
+        {inputDisabledReason ? (
+          <p className="rounded-lg border border-coral/40 bg-coral/10 px-3 py-2 text-sm font-semibold text-rose-100">Input disabled: {inputDisabledReason}.</p>
+        ) : null}
         {message ? <p className="rounded-lg border border-line bg-ink/50 px-3 py-2 text-sm font-semibold text-slate-200">{message}</p> : null}
         {latestDefinedWord ? <WordDefinitionCard definition={latestDefinedWord} /> : null}
       </Card>
+
+      {import.meta.env.DEV ? (
+        <Card className="grid gap-2 text-xs font-semibold text-slate-300">
+          <p className="font-bold uppercase text-slate-400">Debug</p>
+          <p>roomId/roomCode: {roomId}</p>
+          <p>currentPlayerId: {currentPlayerId ?? "none"}</p>
+          <p>currentPlayerName: {currentPlayer?.name ?? "none"}</p>
+          <p>joined status: {currentPlayer ? "joined" : "not joined"}</p>
+          <p>room status: {room.status}</p>
+          <p>time remaining: {timeRemainingSeconds}s</p>
+          <p>input disabled reason: {inputDisabledReason ?? "none"}</p>
+          <p className="sr-only">{now}</p>
+        </Card>
+      ) : null}
 
       <Card>
         <div className="mb-4 flex items-center justify-between">

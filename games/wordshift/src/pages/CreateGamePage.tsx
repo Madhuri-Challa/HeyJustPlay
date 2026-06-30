@@ -6,6 +6,7 @@ import { Input } from "../components/Input";
 import { useAnonymousAuth } from "../hooks/useAnonymousAuth";
 import { createRoom } from "../services/rooms";
 import type { GameMode } from "../types/game";
+import { storeRoomPlayerId } from "../utils/playerIdentity";
 import { isAlphabetic, normalizeWord } from "../utils/wordRules";
 
 const timeOptions = [
@@ -57,6 +58,7 @@ export function CreateGamePage() {
         mode,
         timeLimitSeconds,
       });
+      storeRoomPlayerId(roomId, user.uid);
       navigate(`/room/${roomId}`);
     } catch {
       setError("Could not create the room. Check Firebase setup and try again.");

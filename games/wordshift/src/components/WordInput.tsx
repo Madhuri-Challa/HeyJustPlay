@@ -21,12 +21,16 @@ export function WordInput({ disabled, onSubmit }: { disabled?: boolean; onSubmit
       <input
         className="min-h-14 rounded-lg border border-line bg-ink/70 px-4 py-3 text-center text-xl font-black uppercase tracking-[0.16em] text-white outline-none transition placeholder:text-slate-600 focus:border-mint"
         disabled={disabled || busy}
+        autoComplete="off"
+        enterKeyHint="go"
+        inputMode="text"
         maxLength={5}
         onChange={(event) => setWord(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === "Enter") void submit();
         }}
         placeholder="WORD"
+        type="text"
         value={word}
       />
       <Button disabled={disabled || busy} onClick={() => void submit()}>

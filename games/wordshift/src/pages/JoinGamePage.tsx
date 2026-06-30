@@ -5,6 +5,7 @@ import { Card } from "../components/Card";
 import { Input } from "../components/Input";
 import { useAnonymousAuth } from "../hooks/useAnonymousAuth";
 import { joinRoom } from "../services/rooms";
+import { storeRoomPlayerId } from "../utils/playerIdentity";
 
 export function JoinGamePage() {
   const { roomCode } = useParams();
@@ -37,6 +38,7 @@ export function JoinGamePage() {
     setJoining(true);
     try {
       const roomId = await joinRoom(code, user.uid, name);
+      storeRoomPlayerId(roomId, user.uid);
       navigate(`/room/${roomId}`);
     } catch (joinError) {
       setError(joinError instanceof Error ? joinError.message : "Could not join room.");

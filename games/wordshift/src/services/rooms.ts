@@ -18,17 +18,10 @@ import { recordGamePlayerJoined, recordGameRoomCreated } from "@platform/service
 import { getDictionaryDefinition } from "./dictionary";
 import type { DiscoveredWord, GameMode, Player, PlayerWord, Room } from "../types/game";
 import { generateRoomCode } from "../utils/roomCode";
+import { getRoomTimeRemainingSeconds } from "../utils/time";
 import { normalizeWord, validateSubmittedWord } from "../utils/wordRules";
 
 const WORDSHIFT_GAME_ID = "wordshift";
-
-function getRoomTimeRemainingSeconds(room: Room) {
-  if (room.status !== "ACTIVE") return room.timeLimitSeconds;
-  if (!room.startedAt) return room.timeLimitSeconds;
-
-  const elapsedSeconds = Math.floor((Date.now() - room.startedAt.toMillis()) / 1000);
-  return Math.max(room.timeLimitSeconds - elapsedSeconds, 0);
-}
 
 export interface CreateRoomInput {
   hostId: string;
@@ -171,11 +164,33 @@ export async function submitWord(
   await runTransaction(db, async (transaction) => {
     const roomRef = doc(db, "rooms", roomId);
     const roomSnap = await transaction.get(roomRef);
+    const playerSnap = await transaction.get(playerRef);
     const playerWordSnap = await transaction.get(playerWordRef);
     const discoveredWordSnap = await transaction.get(discoveredWordRef);
     if (!roomSnap.exists()) throw new Error("Room not found.");
-    if ((roomSnap.data() as Room).status !== "ACTIVE") throw new Error("Game already ended.");
+    const latestRoom = roomSnap.data() as Room;
+    if (latestRoom.status !== "ACTIVE") throw new Error("Game already ended.");
+    if (getRoomTimeRemainingSeconds(latestRoom) <= 0) {
+      transaction.update(roomRef, {
+        status: "ENDED",
+        endedAt: serverTimestamp(),
+      });
+      throw new Error("Game already ended.");
+    }
     if (playerWordSnap.exists()) throw new Error("Word already submitted.");
+
+    transaction.set(
+      playerRef,
+      {
+        playerId: player.playerId,
+        name: player.name,
+        ...(playerSnap.exists() ? {} : { joinedAt: serverTimestamp() }),
+        isHost: latestRoom.hostId === player.playerId,
+        uniqueWordsDiscovered: increment(0),
+        totalWordsSubmitted: increment(0),
+      },
+      { merge: true },
+    );
 
     transaction.set(playerWordRef, {
       word,

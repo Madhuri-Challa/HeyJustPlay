@@ -5,6 +5,7 @@ import type { DiscoveredWord, Player, PlayerWord, Room } from "../types/game";
 export function useRoomData(roomId: string | undefined, playerId?: string) {
   const [room, setRoom] = useState<Room | null | undefined>(undefined);
   const [players, setPlayers] = useState<Player[]>([]);
+  const [playersLoaded, setPlayersLoaded] = useState(false);
   const [discoveredWords, setDiscoveredWords] = useState<DiscoveredWord[]>([]);
   const [playerWordsByPlayer, setPlayerWordsByPlayer] = useState<Record<string, PlayerWord[]>>({});
   const [error, setError] = useState<string | null>(null);
@@ -12,6 +13,7 @@ export function useRoomData(roomId: string | undefined, playerId?: string) {
   useEffect(() => {
     if (!roomId) return undefined;
     let pollingInterval: number | undefined;
+    setPlayersLoaded(false);
 
     try {
       const refreshRoomFromServer = () => {
@@ -28,7 +30,10 @@ export function useRoomData(roomId: string | undefined, playerId?: string) {
         setError(roomError.message);
         setRoom(null);
       });
-      const playersUnsubscribe = subscribePlayers(roomId, setPlayers);
+      const playersUnsubscribe = subscribePlayers(roomId, (nextPlayers) => {
+        setPlayers(nextPlayers);
+        setPlayersLoaded(true);
+      });
       const discoveredWordsUnsubscribe = subscribeDiscoveredWords(roomId, setDiscoveredWords);
       pollingInterval = window.setInterval(refreshRoomFromServer, 1500);
       window.addEventListener("focus", refreshRoomFromServer);
@@ -79,7 +84,7 @@ export function useRoomData(roomId: string | undefined, playerId?: string) {
   const allPlayerWords = useMemo(() => Object.values(playerWordsByPlayer).flat(), [playerWordsByPlayer]);
 
   return useMemo(
-    () => ({ error, room, players, discoveredWords, playerWords, playerWordsByPlayer, allPlayerWords }),
-    [allPlayerWords, discoveredWords, error, playerWords, playerWordsByPlayer, players, room],
+    () => ({ error, room, players, playersLoaded, discoveredWords, playerWords, playerWordsByPlayer, allPlayerWords }),
+    [allPlayerWords, discoveredWords, error, playerWords, playerWordsByPlayer, players, playersLoaded, room],
   );
 }

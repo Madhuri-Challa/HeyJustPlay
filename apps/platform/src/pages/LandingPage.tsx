@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, Navigate, useSearchParams } from "react-router-dom";
 import type { GameStats } from "@packages/shared/src";
 import { getGameCatalogEntry } from "../games/catalog";
 import { getEnabledGameStats } from "../services/gameStats";
@@ -14,8 +14,10 @@ function formatAveragePlayers(average: number) {
 }
 
 export function LandingPage() {
+  const [searchParams] = useSearchParams();
   const [games, setGames] = useState<GameStats[]>([]);
   const [loadingGames, setLoadingGames] = useState(true);
+  const inviteRoomCode = searchParams.get("room")?.trim().toUpperCase();
 
   useEffect(() => {
     let ignore = false;
@@ -32,6 +34,10 @@ export function LandingPage() {
       ignore = true;
     };
   }, []);
+
+  if (inviteRoomCode) {
+    return <Navigate to={`/join/${inviteRoomCode}`} replace />;
+  }
 
   return (
     <div className="flex flex-1 flex-col gap-8">

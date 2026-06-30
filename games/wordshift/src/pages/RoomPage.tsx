@@ -22,7 +22,7 @@ export function RoomPage() {
   const { user, loading: authLoading } = useAnonymousAuth();
   const storedPlayerId = useMemo(() => getStoredRoomPlayerId(roomId), [roomId]);
   const candidatePlayerId = storedPlayerId ?? user?.uid;
-  const { error: roomError, room, players, playerWordsByPlayer } = useRoomData(roomId, candidatePlayerId);
+  const { error: roomError, room, players, playersLoaded, playerWordsByPlayer } = useRoomData(roomId, candidatePlayerId);
   const [message, setMessage] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
 
@@ -34,6 +34,7 @@ export function RoomPage() {
   const playerWords = currentPlayerId ? (playerWordsByPlayer[currentPlayerId] ?? []) : [];
   const isHost = Boolean(currentPlayer && room?.hostId === currentPlayer.playerId);
   const joinLink = `${window.location.origin}/join/${roomId ?? ""}`;
+  const whatsAppShareLink = `https://wa.me/?text=${encodeURIComponent(`Join my HeyJustPlay WordShift room: ${joinLink}`)}`;
   const latestDefinedWord = [...playerWords].reverse().find((entry) => entry.dictionary)?.dictionary;
   const timeRemainingSeconds = room ? getRoomTimeRemainingSeconds(room) : 0;
   const inputDisabledReason = !room
@@ -58,15 +59,20 @@ export function RoomPage() {
 
   useEffect(() => {
     if (!roomId) return;
+    if (!room || !playersLoaded) return;
+    if (room.status !== "ENDED" && !currentPlayer) {
+      navigate(`/join/${roomId}`, { replace: true });
+      return;
+    }
     if (room?.status === "ACTIVE" && !location.pathname.endsWith("/play")) {
       navigate(`/room/${roomId}/play`, { replace: true });
     } else if (room?.status === "ENDED" && !location.pathname.endsWith("/results")) {
       navigate(`/room/${roomId}/results`, { replace: true });
     }
-  }, [location.pathname, navigate, room?.status, roomId]);
+  }, [currentPlayer, location.pathname, navigate, playersLoaded, room, roomId]);
 
   if (!roomId) return <Navigate to="/" replace />;
-  if (authLoading || room === undefined) return <p className="py-10 text-center text-slate-300">Loading room...</p>;
+  if (authLoading || room === undefined || !playersLoaded) return <p className="py-10 text-center text-slate-300">Loading room...</p>;
   if (!room) {
     return (
       <Card className="mx-auto grid max-w-md gap-4 text-center">
@@ -79,6 +85,7 @@ export function RoomPage() {
     );
   }
   if (room.status === "ENDED") return <Navigate to={`/room/${roomId}/results`} replace />;
+  if (!currentPlayer) return <Navigate to={`/join/${roomId}`} replace />;
   if (room.status === "ACTIVE" && !location.pathname.endsWith("/play")) {
     return <Navigate to={`/room/${roomId}/play`} replace />;
   }
@@ -93,6 +100,14 @@ export function RoomPage() {
             <p className="text-xs font-bold uppercase text-slate-400">Join link</p>
             <p className="mt-1 break-all text-sm font-semibold text-slate-200">{joinLink}</p>
           </div>
+          <a
+            className="min-h-12 rounded-lg bg-white/10 px-5 py-3 text-center text-sm font-bold text-white transition hover:bg-white/15"
+            href={whatsAppShareLink}
+            rel="noreferrer"
+            target="_blank"
+          >
+            Share on WhatsApp
+          </a>
           {isHost ? (
             <Button disabled={players.length === 0} onClick={() => void startGame(roomId)}>
               Start Game

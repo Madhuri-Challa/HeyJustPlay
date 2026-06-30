@@ -2,16 +2,24 @@ import { Link, Navigate, useParams } from "react-router-dom";
 import { Card } from "../components/Card";
 import { ResultsLeaderboard } from "../components/ResultsLeaderboard";
 import { useRoomData } from "../hooks/useRoomData";
-import type { Player, PlayerScore, PlayerWord } from "../types/game";
-import { findLongestChain, buildChainToWord } from "../utils/chains";
+import { buildChainToWord } from "../utils/chains";
+import { getAllUniqueWordsGroupedByPlayer, getLongestChain, getPlayerResults } from "../utils/results";
 
-function getPlayerScore(player: Player, playerWords: PlayerWord[], uniqueWordsDiscovered: number): PlayerScore {
-  return {
-    playerId: player.playerId,
-    name: player.name,
-    uniqueWordsDiscovered: player.uniqueWordsDiscovered ?? uniqueWordsDiscovered,
-    totalWordsSubmitted: player.totalWordsSubmitted ?? playerWords.length,
-  };
+function ArrowWordList({ words }: { words: string[] }) {
+  if (!words.length) {
+    return <p className="text-sm font-semibold text-slate-400">None</p>;
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {words.map((word, index) => (
+        <span key={`${word}-${index}`} className="inline-flex items-center gap-2">
+          {index > 0 ? <span className="text-slate-500">→</span> : null}
+          <span className="rounded-md bg-white/10 px-2 py-1 font-mono text-xs font-bold uppercase tracking-widest text-slate-200">{word}</span>
+        </span>
+      ))}
+    </div>
+  );
 }
 
 export function ResultsPage() {
@@ -32,32 +40,21 @@ export function ResultsPage() {
     );
   }
 
-  const scoreRows = players
-    .map((player) => {
-      const playerWords = playerWordsByPlayer[player.playerId] ?? [];
-      const uniqueWordsDiscovered = discoveredWords.filter((entry) => entry.firstDiscoveredBy === player.playerId).length;
-      return {
-        player,
-        score: getPlayerScore(player, playerWords, uniqueWordsDiscovered),
-        words: playerWords,
-      };
-    });
+  const scoreRows = getPlayerResults(players, playerWordsByPlayer, discoveredWords, room.startWord);
   const uniqueWordsWinner = [...scoreRows].sort((first, second) => second.score.uniqueWordsDiscovered - first.score.uniqueWordsDiscovered)[0];
   const totalWordsWinner = [...scoreRows].sort((first, second) => second.score.totalWordsSubmitted - first.score.totalWordsSubmitted)[0];
-  const longestChain = scoreRows.reduce<Pick<PlayerWord, "word" | "parentWord">[]>((longest, row) => {
-    const chain = findLongestChain([{ word: room.startWord, parentWord: null }, ...row.words]);
-    return chain.length > longest.length ? chain : longest;
-  }, []);
+  const longestChainWinner = getLongestChain(players, playerWordsByPlayer, room.startWord);
   const targetFinder = room.targetWord ? discoveredWords.find((entry) => entry.word === room.targetWord) : undefined;
   const targetFinderWords = targetFinder ? (playerWordsByPlayer[targetFinder.firstDiscoveredBy] ?? []) : [];
   const targetChain = targetFinder ? buildChainToWord(targetFinder.word, [{ word: room.startWord, parentWord: null }, ...targetFinderWords]) : [];
+  const uniqueWordsByPlayer = getAllUniqueWordsGroupedByPlayer(players, discoveredWords);
 
   return (
     <div className="grid gap-5">
       <Card className="grid gap-4">
         <p className="text-sm font-bold uppercase tracking-[0.22em] text-mint">Results</p>
         <h1 className="text-4xl font-black text-white">Game complete</h1>
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-3">
           <div className="rounded-lg border border-line bg-ink/50 p-4">
             <p className="text-xs font-bold uppercase text-slate-400">Unique Words Winner</p>
             <p className="mt-1 text-lg font-black text-white">{uniqueWordsWinner?.score.uniqueWordsDiscovered ? uniqueWordsWinner.player.name : "None"}</p>
@@ -68,6 +65,11 @@ export function ResultsPage() {
             <p className="mt-1 text-lg font-black text-white">{totalWordsWinner?.score.totalWordsSubmitted ? totalWordsWinner.player.name : "None"}</p>
             <p className="font-mono text-2xl font-black text-mint">{totalWordsWinner?.score.totalWordsSubmitted ?? 0}</p>
           </div>
+          <div className="rounded-lg border border-line bg-ink/50 p-4">
+            <p className="text-xs font-bold uppercase text-slate-400">Longest Chain Winner</p>
+            <p className="mt-1 text-lg font-black text-white">{longestChainWinner && longestChainWinner.chain.length > 1 ? longestChainWinner.player.name : "None"}</p>
+            <p className="font-mono text-2xl font-black text-mint">{longestChainWinner ? Math.max(longestChainWinner.chain.length - 1, 0) : 0}</p>
+          </div>
         </div>
         <div className="grid gap-3 sm:grid-cols-3">
           <div className="rounded-lg border border-line bg-ink/50 p-4">
@@ -76,7 +78,7 @@ export function ResultsPage() {
           </div>
           <div className="rounded-lg border border-line bg-ink/50 p-4">
             <p className="text-xs font-bold uppercase text-slate-400">Longest chain</p>
-            <p className="mt-1 font-mono text-3xl font-black text-white">{Math.max(longestChain.length - 1, 0)}</p>
+            <p className="mt-1 font-mono text-3xl font-black text-white">{longestChainWinner ? Math.max(longestChainWinner.chain.length - 1, 0) : 0}</p>
           </div>
           <div className="rounded-lg border border-line bg-ink/50 p-4">
             <p className="text-xs font-bold uppercase text-slate-400">Target finder</p>
@@ -95,44 +97,47 @@ export function ResultsPage() {
 
       <Card>
         <h2 className="mb-4 text-xl font-black text-white">Leaderboard</h2>
-        <ResultsLeaderboard discoveredWords={discoveredWords} playerWordsByPlayer={playerWordsByPlayer} players={players} />
+        <ResultsLeaderboard rows={scoreRows} />
       </Card>
 
       <Card>
         <div className="mb-4 flex items-center justify-between gap-3">
-          <h2 className="text-xl font-black text-white">All Unique Words</h2>
+          <h2 className="text-xl font-black text-white">All Unique Words by Discoverer</h2>
           <span className="text-xs font-bold uppercase text-slate-400">{discoveredWords.length} total</span>
         </div>
-        <div className="flex flex-wrap gap-2">
-          {discoveredWords.map((entry) => (
-            <span key={entry.word} className="rounded-md bg-white/10 px-2 py-1 font-mono text-xs font-bold uppercase tracking-widest text-slate-200">
-              {entry.word}
-            </span>
+        <div className="grid gap-4">
+          {uniqueWordsByPlayer.map(({ player, words }) => (
+            <div key={player.playerId} className="rounded-lg border border-line bg-ink/45 p-3">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <h3 className="font-bold text-white">{player.name}</h3>
+                <span className="text-xs font-bold uppercase text-slate-400">{words.length} unique</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {words.length ? (
+                  words.map((entry) => (
+                    <span key={entry.word} className="rounded-md bg-mint/15 px-2 py-1 font-mono text-xs font-bold uppercase tracking-widest text-mint">
+                      {entry.word}
+                    </span>
+                  ))
+                ) : (
+                  <p className="text-sm font-semibold text-slate-400">No first discoveries.</p>
+                )}
+              </div>
+            </div>
           ))}
         </div>
       </Card>
 
       <Card>
         <h2 className="mb-4 text-xl font-black text-white">Longest Chain</h2>
-        <div className="flex flex-wrap gap-2">
-          {longestChain.map((entry) => (
-            <span key={entry.word} className="rounded-md bg-white/10 px-2 py-1 font-mono text-xs font-bold uppercase tracking-widest text-slate-200">
-              {entry.word}
-            </span>
-          ))}
-        </div>
+        {longestChainWinner ? <p className="mb-3 text-sm font-semibold text-slate-300">{longestChainWinner.player.name}</p> : null}
+        <ArrowWordList words={longestChainWinner?.chain.map((entry) => entry.word) ?? []} />
       </Card>
 
       {targetChain.length ? (
         <Card>
           <h2 className="mb-4 text-xl font-black text-white">Target Chain</h2>
-          <div className="flex flex-wrap gap-2">
-            {targetChain.map((entry) => (
-              <span key={entry.word} className="rounded-md bg-mint/15 px-2 py-1 font-mono text-xs font-bold uppercase tracking-widest text-mint">
-                {entry.word}
-              </span>
-            ))}
-          </div>
+          <ArrowWordList words={targetChain.map((entry) => entry.word)} />
         </Card>
       ) : null}
     </div>

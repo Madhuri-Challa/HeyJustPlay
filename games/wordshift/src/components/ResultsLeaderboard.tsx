@@ -1,32 +1,28 @@
-import type { DiscoveredWord, Player, PlayerScore, PlayerWord } from "../types/game";
+import type { PlayerResult } from "../utils/results";
 
-function getPlayerScore(player: Player, discoveredWords: DiscoveredWord[], playerWords: PlayerWord[]): PlayerScore {
-  return {
-    playerId: player.playerId,
-    name: player.name,
-    uniqueWordsDiscovered: player.uniqueWordsDiscovered ?? discoveredWords.filter((entry) => entry.firstDiscoveredBy === player.playerId).length,
-    totalWordsSubmitted: player.totalWordsSubmitted ?? playerWords.length,
-  };
+function WordList({ emptyLabel, words }: { emptyLabel: string; words: string[] }) {
+  if (!words.length) {
+    return <p className="text-sm font-semibold text-slate-400">{emptyLabel}</p>;
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {words.map((word, index) => (
+        <span key={`${word}-${index}`} className="inline-flex items-center gap-2">
+          {index > 0 ? <span className="text-slate-500">→</span> : null}
+          <span className="rounded-md bg-white/10 px-2 py-1 font-mono text-xs font-bold uppercase tracking-widest text-slate-200">{word}</span>
+        </span>
+      ))}
+    </div>
+  );
 }
 
 export function ResultsLeaderboard({
-  players,
-  discoveredWords,
-  playerWordsByPlayer,
+  rows,
 }: {
-  players: Player[];
-  discoveredWords: DiscoveredWord[];
-  playerWordsByPlayer: Record<string, PlayerWord[]>;
+  rows: PlayerResult[];
 }) {
-  const rows = players
-    .map((player) => {
-      const playerWords = playerWordsByPlayer[player.playerId] ?? [];
-      return {
-        player,
-        score: getPlayerScore(player, discoveredWords, playerWords),
-        words: playerWords,
-      };
-    })
+  const sortedRows = [...rows]
     .sort(
       (first, second) =>
         second.score.uniqueWordsDiscovered - first.score.uniqueWordsDiscovered ||
@@ -35,9 +31,9 @@ export function ResultsLeaderboard({
 
   return (
     <div className="grid gap-3">
-      {rows.map((row, index) => (
+      {sortedRows.map((row, index) => (
         <div key={row.player.playerId} className="rounded-lg border border-line bg-ink/55 p-4">
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <p className="text-xs font-bold uppercase text-slate-400">#{index + 1}</p>
               <h3 className="text-lg font-black text-white">{row.player.name}</h3>
@@ -53,12 +49,26 @@ export function ResultsLeaderboard({
               </div>
             </div>
           </div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {row.words.map((entry) => (
-              <span key={entry.word} className="rounded-md bg-white/10 px-2 py-1 font-mono text-xs font-bold uppercase tracking-widest text-slate-200">
-                {entry.word}
-              </span>
-            ))}
+
+          <div className="mt-4 grid gap-4">
+            <div className="grid gap-2">
+              <p className="text-xs font-bold uppercase text-slate-400">Chain</p>
+              <WordList emptyLabel="No submitted words." words={row.chain.map((entry) => entry.word)} />
+            </div>
+            <div className="grid gap-2">
+              <p className="text-xs font-bold uppercase text-slate-400">Unique discoveries</p>
+              <div className="flex flex-wrap gap-2">
+                {row.uniqueWords.length ? (
+                  row.uniqueWords.map((entry) => (
+                    <span key={entry.word} className="rounded-md bg-mint/15 px-2 py-1 font-mono text-xs font-bold uppercase tracking-widest text-mint">
+                      {entry.word}
+                    </span>
+                  ))
+                ) : (
+                  <p className="text-sm font-semibold text-slate-400">No first discoveries.</p>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       ))}

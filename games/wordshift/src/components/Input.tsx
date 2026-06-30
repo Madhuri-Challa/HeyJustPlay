@@ -10,6 +10,9 @@ export function Input({ label, className = "", ...props }: InputProps) {
       <span>{label}</span>
       <input
         className={`min-h-12 rounded-lg border border-line bg-ink/70 px-4 py-3 text-base text-white outline-none transition placeholder:text-slate-500 focus:border-mint ${className}`}
+        enterKeyHint="done"
+        inputMode="text"
+        type="text"
         {...props}
       />
     </label>

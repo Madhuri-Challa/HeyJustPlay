@@ -72,7 +72,17 @@ export function CreateGamePage() {
         <h1 className="mt-2 text-3xl font-black text-white">Create Game</h1>
       </div>
       <Card className="grid gap-4">
-        <Input label="Host display name" maxLength={24} onChange={(event) => setHostName(event.target.value)} placeholder="Ramu" value={hostName} />
+        <Input
+          autoComplete="name"
+          enterKeyHint="done"
+          inputMode="text"
+          label="Host display name"
+          maxLength={24}
+          onChange={(event) => setHostName(event.target.value)}
+          placeholder="Ramu"
+          type="text"
+          value={hostName}
+        />
         <Input label="Start word" maxLength={5} onChange={(event) => setStartWord(event.target.value)} placeholder="ABLE" value={startWord} />
 
         <div className="grid gap-2">

@@ -52,8 +52,26 @@ export function JoinGamePage() {
         <h1 className="mt-2 text-3xl font-black text-white">Join Game</h1>
       </div>
       <Card className="grid gap-4">
-        <Input label="Room code" maxLength={6} onChange={(event) => setCode(event.target.value.toUpperCase())} placeholder="ABC123" value={code} />
-        <Input label="Display name" maxLength={24} onChange={(event) => setName(event.target.value)} placeholder="Player" value={name} />
+        <Input
+          autoCapitalize="characters"
+          autoComplete="off"
+          label="Room code"
+          maxLength={6}
+          onChange={(event) => setCode(event.target.value.toUpperCase())}
+          placeholder="ABC123"
+          value={code}
+        />
+        <Input
+          autoComplete="name"
+          enterKeyHint="done"
+          inputMode="text"
+          label="Display name"
+          maxLength={24}
+          onChange={(event) => setName(event.target.value)}
+          placeholder="Player"
+          type="text"
+          value={name}
+        />
         {authError || error ? <p className="rounded-lg border border-coral/40 bg-coral/10 px-3 py-2 text-sm font-semibold text-rose-100">{authError ?? error}</p> : null}
         <Button disabled={authLoading || joining} onClick={() => void handleJoin()}>
           Join

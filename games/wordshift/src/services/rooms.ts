@@ -22,6 +22,14 @@ import { normalizeWord, validateSubmittedWord } from "../utils/wordRules";
 
 const WORDSHIFT_GAME_ID = "wordshift";
 
+function getRoomTimeRemainingSeconds(room: Room) {
+  if (room.status !== "ACTIVE") return room.timeLimitSeconds;
+  if (!room.startedAt) return room.timeLimitSeconds;
+
+  const elapsedSeconds = Math.floor((Date.now() - room.startedAt.toMillis()) / 1000);
+  return Math.max(room.timeLimitSeconds - elapsedSeconds, 0);
+}
+
 export interface CreateRoomInput {
   hostId: string;
   hostName: string;
@@ -79,7 +87,15 @@ export async function joinRoom(roomId: string, playerId: string, name: string) {
   const roomSnap = await getDoc(roomRef);
 
   if (!roomSnap.exists()) throw new Error("Room not found.");
-  if ((roomSnap.data() as Room).status === "ENDED") throw new Error("Game already ended.");
+  const room = roomSnap.data() as Room;
+  if (room.status === "ENDED") throw new Error("Game already ended.");
+  if (room.status === "ACTIVE" && getRoomTimeRemainingSeconds(room) <= 0) {
+    await updateDoc(roomRef, {
+      status: "ENDED",
+      endedAt: serverTimestamp(),
+    });
+    throw new Error("Game already ended.");
+  }
 
   const playerRef = doc(db, "rooms", normalizedRoomId, "players", playerId);
   const playerSnap = await getDoc(playerRef);
@@ -89,7 +105,7 @@ export async function joinRoom(roomId: string, playerId: string, name: string) {
       playerId,
       name: name.trim(),
       joinedAt: serverTimestamp(),
-      isHost: (roomSnap.data() as Room).hostId === playerId,
+      isHost: room.hostId === playerId,
       ...(playerSnap.exists() ? {} : { uniqueWordsDiscovered: 0, totalWordsSubmitted: 0 }),
     },
     { merge: true },

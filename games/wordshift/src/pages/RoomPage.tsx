@@ -11,7 +11,7 @@ import { WordInput } from "../components/WordInput";
 import { WordDefinitionCard } from "../components/WordDefinitionCard";
 import { useAnonymousAuth } from "../hooks/useAnonymousAuth";
 import { useRoomData } from "../hooks/useRoomData";
-import { endGame, startGame, submitWord } from "../services/rooms";
+import { endGame, resetRoom, startGame, submitWord, updatePlayerPresence } from "../services/rooms";
 import { getStoredRoomPlayerId } from "../utils/playerIdentity";
 import { getRoomTimeRemainingSeconds } from "../utils/time";
 import { normalizeWord } from "../utils/wordRules";
@@ -29,6 +29,7 @@ export function RoomPage() {
   const candidatePlayerId = storedPlayerId ?? user?.uid;
   const { error: roomError, room, players, playersLoaded, playerWordsByPlayer } = useRoomData(roomId, candidatePlayerId);
   const [message, setMessage] = useState<string | null>(null);
+  const [hostActionBusy, setHostActionBusy] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [optimisticWords, setOptimisticWords] = useState<OptimisticWord[]>([]);
 
@@ -59,8 +60,20 @@ export function RoomPage() {
   const wordInputDisabled = Boolean(inputDisabledReason);
 
   const handleExpire = useCallback(() => {
-    if (roomId && room?.status === "ACTIVE") void endGame(roomId);
-  }, [room?.status, roomId]);
+    if (roomId && room?.status === "ACTIVE" && isHost && currentPlayer) void endGame(roomId, currentPlayer.playerId);
+  }, [currentPlayer, isHost, room?.status, roomId]);
+
+  async function runHostAction(action: () => Promise<void>) {
+    setHostActionBusy(true);
+    setMessage(null);
+    try {
+      await action();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Host action failed.");
+    } finally {
+      setHostActionBusy(false);
+    }
+  }
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), 500);
@@ -72,6 +85,30 @@ export function RoomPage() {
     const acceptedWords = new Set(playerWords.map((entry) => entry.word));
     setOptimisticWords((entries) => entries.filter((entry) => !acceptedWords.has(entry.word)));
   }, [optimisticWords.length, playerWords]);
+
+  useEffect(() => {
+    if (!roomId || !currentPlayer?.playerId) return undefined;
+    const playerId = currentPlayer.playerId;
+
+    const markOnline = () => {
+      void updatePlayerPresence(roomId, playerId, true).catch(() => undefined);
+    };
+    const markOffline = () => {
+      void updatePlayerPresence(roomId, playerId, false).catch(() => undefined);
+    };
+
+    markOnline();
+    const heartbeat = window.setInterval(markOnline, 20000);
+    window.addEventListener("pagehide", markOffline);
+    window.addEventListener("beforeunload", markOffline);
+
+    return () => {
+      window.clearInterval(heartbeat);
+      window.removeEventListener("pagehide", markOffline);
+      window.removeEventListener("beforeunload", markOffline);
+      markOffline();
+    };
+  }, [currentPlayer?.playerId, roomId]);
 
   useEffect(() => {
     if (!roomId) return;
@@ -125,12 +162,18 @@ export function RoomPage() {
             Share on WhatsApp
           </a>
           {isHost ? (
-            <Button disabled={players.length === 0} onClick={() => void startGame(roomId)}>
-              Start Game
-            </Button>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Button disabled={players.length === 0 || hostActionBusy} onClick={() => void runHostAction(() => startGame(roomId, currentPlayer.playerId))}>
+                Start Game
+              </Button>
+              <Button disabled={hostActionBusy} onClick={() => void runHostAction(() => resetRoom(roomId, currentPlayer.playerId))} variant="secondary">
+                Reset Room
+              </Button>
+            </div>
           ) : (
             <p className="rounded-lg border border-line bg-ink/50 px-3 py-3 text-center font-semibold text-slate-300">Waiting for host to start...</p>
           )}
+          {message ? <p className="rounded-lg border border-line bg-ink/50 px-3 py-2 text-sm font-semibold text-slate-200">{message}</p> : null}
         </Card>
 
         <Card>
@@ -138,7 +181,7 @@ export function RoomPage() {
             <h1 className="text-2xl font-black text-white">Waiting Room</h1>
             <span className="font-mono text-sm font-bold text-mint">{players.length} joined</span>
           </div>
-          <PlayerList players={players} />
+          <PlayerList now={now} players={players} />
         </Card>
       </div>
     );
@@ -167,6 +210,19 @@ export function RoomPage() {
       </section>
 
       <Card className="grid gap-4">
+        {isHost ? (
+          <div className="grid gap-2 sm:grid-cols-3">
+            <Button disabled={hostActionBusy} onClick={() => void runHostAction(() => endGame(roomId, currentPlayer.playerId))} variant="danger">
+              End Game
+            </Button>
+            <Button disabled={hostActionBusy} onClick={() => void runHostAction(() => resetRoom(roomId, currentPlayer.playerId))} variant="secondary">
+              Reset Room
+            </Button>
+            <Button disabled={hostActionBusy} onClick={() => void runHostAction(() => resetRoom(roomId, currentPlayer.playerId, true))}>
+              Start New Round
+            </Button>
+          </div>
+        ) : null}
         <WordInput
           disabled={wordInputDisabled}
           onSubmit={async (word) => {
@@ -207,6 +263,7 @@ export function RoomPage() {
           <p>currentPlayerName: {currentPlayer?.name ?? "none"}</p>
           <p>joined status: {currentPlayer ? "joined" : "not joined"}</p>
           <p>room status: {room.status}</p>
+          <p>presence: {currentPlayer.isOnline === false ? "offline" : "online"}</p>
           <p>time remaining: {timeRemainingSeconds}s</p>
           <p>input disabled reason: {inputDisabledReason ?? "none"}</p>
           <p className="sr-only">{now}</p>

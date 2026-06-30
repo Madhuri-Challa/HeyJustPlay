@@ -1,8 +1,13 @@
-import { Link, Navigate, useParams } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
+import { Button } from "../components/Button";
 import { Card } from "../components/Card";
 import { ResultsLeaderboard } from "../components/ResultsLeaderboard";
+import { useAnonymousAuth } from "../hooks/useAnonymousAuth";
 import { useRoomData } from "../hooks/useRoomData";
+import { resetRoom } from "../services/rooms";
 import { buildChainToWord } from "../utils/chains";
+import { getStoredRoomPlayerId } from "../utils/playerIdentity";
 import { getAllUniqueWordsGroupedByPlayer, getLongestChain, getPlayerResults } from "../utils/results";
 
 function ArrowWordList({ words }: { words: string[] }) {
@@ -24,7 +29,22 @@ function ArrowWordList({ words }: { words: string[] }) {
 
 export function ResultsPage() {
   const { roomId } = useParams();
-  const { error, room, players, discoveredWords, playerWordsByPlayer } = useRoomData(roomId);
+  const navigate = useNavigate();
+  const { user } = useAnonymousAuth();
+  const storedPlayerId = useMemo(() => getStoredRoomPlayerId(roomId), [roomId]);
+  const candidatePlayerId = storedPlayerId ?? user?.uid;
+  const { error, room, players, discoveredWords, playerWordsByPlayer } = useRoomData(roomId, candidatePlayerId);
+  const [hostActionBusy, setHostActionBusy] = useState(false);
+  const [hostActionError, setHostActionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!roomId || !room) return;
+    if (room.status === "ACTIVE") {
+      navigate(`/room/${roomId}/play`, { replace: true });
+    } else if (room.status === "WAITING") {
+      navigate(`/room/${roomId}`, { replace: true });
+    }
+  }, [navigate, room, roomId]);
 
   if (!roomId) return <Navigate to="/" replace />;
   if (room === undefined) return <p className="py-10 text-center text-slate-300">Loading results...</p>;
@@ -40,6 +60,7 @@ export function ResultsPage() {
     );
   }
 
+  const confirmedRoomId = roomId;
   const scoreRows = getPlayerResults(players, playerWordsByPlayer, discoveredWords, room.startWord);
   const uniqueWordsWinner = [...scoreRows].sort((first, second) => second.score.uniqueWordsDiscovered - first.score.uniqueWordsDiscovered)[0];
   const totalWordsWinner = [...scoreRows].sort((first, second) => second.score.totalWordsSubmitted - first.score.totalWordsSubmitted)[0];
@@ -48,6 +69,22 @@ export function ResultsPage() {
   const targetFinderWords = targetFinder ? (playerWordsByPlayer[targetFinder.firstDiscoveredBy] ?? []) : [];
   const targetChain = targetFinder ? buildChainToWord(targetFinder.word, [{ word: room.startWord, parentWord: null }, ...targetFinderWords]) : [];
   const uniqueWordsByPlayer = getAllUniqueWordsGroupedByPlayer(players, discoveredWords);
+  const currentPlayer = players.find((player) => player.playerId === storedPlayerId) ?? players.find((player) => player.playerId === user?.uid);
+  const isHost = Boolean(currentPlayer && room.hostId === currentPlayer.playerId);
+
+  async function runHostAction(startImmediately: boolean) {
+    if (!currentPlayer) return;
+    setHostActionBusy(true);
+    setHostActionError(null);
+    try {
+      await resetRoom(confirmedRoomId, currentPlayer.playerId, startImmediately);
+      navigate(startImmediately ? `/room/${confirmedRoomId}/play` : `/room/${confirmedRoomId}`);
+    } catch (actionError) {
+      setHostActionError(actionError instanceof Error ? actionError.message : "Host action failed.");
+    } finally {
+      setHostActionBusy(false);
+    }
+  }
 
   return (
     <div className="grid gap-5">
@@ -93,6 +130,17 @@ export function ResultsPage() {
             Play Again
           </Link>
         </div>
+        {isHost ? (
+          <div className="grid gap-2 border-t border-line pt-4 sm:grid-cols-2">
+            <Button disabled={hostActionBusy} onClick={() => void runHostAction(false)} variant="secondary">
+              Reset Room
+            </Button>
+            <Button disabled={hostActionBusy} onClick={() => void runHostAction(true)}>
+              Start New Round
+            </Button>
+          </div>
+        ) : null}
+        {hostActionError ? <p className="rounded-lg border border-coral/40 bg-coral/10 px-3 py-2 text-sm font-semibold text-rose-100">{hostActionError}</p> : null}
       </Card>
 
       <Card>

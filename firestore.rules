@@ -1,0 +1,346 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: rooms
+    // Document ID: room code, 6 uppercase alphanumeric characters
+    // Fields:
+    //   - roomCode: string, required, immutable, equals document ID
+    //   - hostId: string, required, immutable, Firebase Auth uid
+    //   - hostName: string, required, immutable display name
+    //   - startWord: string, required, immutable, lowercase 4-5 letters
+    //   - targetWord: string, optional, immutable, lowercase 4-5 letters
+    //   - mode: string, required, immutable, DISCOVERY or TARGET
+    //   - status: string, required, WAITING -> ACTIVE -> ENDED
+    //   - timeLimitSeconds: int, required, immutable, one of app presets
+    //   - createdAt: timestamp, required, immutable
+    //   - startedAt: timestamp, optional, set when host starts
+    //   - endedAt: timestamp, optional, set when host ends or target is reached
+    //
+    // Subcollection: rooms/{roomId}/players
+    // Document ID: Firebase Auth uid
+    // Fields:
+    //   - playerId: string, required, immutable, equals document ID
+    //   - name: string, required display name
+    //   - joinedAt: timestamp, required, immutable
+    //   - isHost: bool, required, mirrors room hostId
+    //   - isOnline: bool, required, player-maintained presence flag
+    //   - lastSeenAt: timestamp, required, player-maintained heartbeat
+    //   - uniqueWordsDiscovered: int, optional legacy counter, create-only
+    //   - totalWordsSubmitted: int, optional legacy counter, create-only
+    //
+    // Subcollection: rooms/{roomId}/players/{playerId}/words
+    // Document ID: submitted lowercase word
+    // Fields:
+    //   - word: string, required, equals document ID
+    //   - playerId: string, required, immutable, equals parent player ID
+    //   - playerName: string, required
+    //   - parentWord: string, required
+    //   - dictionary: map, optional dictionary result
+    //   - submittedAt: timestamp, required
+    //
+    // Subcollection: rooms/{roomId}/words
+    // Document ID: first-discovered lowercase word
+    // Fields:
+    //   - word: string, required, equals document ID
+    //   - firstDiscoveredBy: string, required player ID
+    //   - firstDiscoveredByName: string, required
+    //   - firstDiscoveredParentWord: string, optional
+    //   - dictionary: map, optional dictionary result
+    //   - discoveredAt: timestamp, required
+    //
+    // Collection: gameStats
+    // Document ID: game ID
+    // Fields are aggregate counters surfaced on the home page.
+    //
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function uidUnchanged(field) {
+      return request.resource.data[field] == request.auth.uid;
+    }
+
+    function uidNotModified(field) {
+      return request.resource.data[field] == resource.data[field];
+    }
+
+    function hasRequiredFields(data, fields) {
+      return data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(data, fields) {
+      return data.keys().hasOnly(fields);
+    }
+
+    function validString(value, minLen, maxLen) {
+      return value is string && value.size() >= minLen && value.size() <= maxLen;
+    }
+
+    function validName(value) {
+      return validString(value, 1, 24);
+    }
+
+    function validUid(value) {
+      return validString(value, 1, 128);
+    }
+
+    function validRoomId(value) {
+      return value is string && value.matches('^[A-Z0-9]{6}$');
+    }
+
+    function validWord(value) {
+      return value is string && value.matches('^[a-z]{4,5}$');
+    }
+
+    function validOptionalLegacyCount(data, field) {
+      return !(field in data) || (data[field] is int && data[field] >= 0 && data[field] <= 10000);
+    }
+
+    function validPlayerPresence(data) {
+      return data.isOnline is bool && data.lastSeenAt == request.time;
+    }
+
+    function validDictionary(data) {
+      return !('dictionary' in data) ||
+        (
+          data.dictionary is map &&
+          data.dictionary.keys().hasOnly(['word', 'partOfSpeech', 'definition', 'example']) &&
+          validString(data.dictionary.word, 1, 64) &&
+          validString(data.dictionary.partOfSpeech, 1, 64) &&
+          validString(data.dictionary.definition, 1, 1000) &&
+          (!('example' in data.dictionary) || validString(data.dictionary.example, 1, 500))
+        );
+    }
+
+    function roomPath(roomId) {
+      return /databases/$(database)/documents/rooms/$(roomId);
+    }
+
+    function playerPath(roomId, playerId) {
+      return /databases/$(database)/documents/rooms/$(roomId)/players/$(playerId);
+    }
+
+    function playerWordPath(roomId, playerId, wordId) {
+      return /databases/$(database)/documents/rooms/$(roomId)/players/$(playerId)/words/$(wordId);
+    }
+
+    function roomExists(roomId) {
+      return exists(roomPath(roomId));
+    }
+
+    function roomData(roomId) {
+      return get(roomPath(roomId)).data;
+    }
+
+    function isRoomParticipant(roomId) {
+      return isAuthenticated() && exists(playerPath(roomId, request.auth.uid));
+    }
+
+    function isRoomHost(roomId) {
+      return isAuthenticated() && roomExists(roomId) && roomData(roomId).hostId == request.auth.uid;
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidRoomCreate(roomId, data) {
+      return hasRequiredFields(data, ['roomCode', 'hostId', 'hostName', 'startWord', 'mode', 'status', 'timeLimitSeconds', 'createdAt']) &&
+        hasOnlyAllowedFields(data, ['roomCode', 'hostId', 'hostName', 'startWord', 'targetWord', 'mode', 'status', 'timeLimitSeconds', 'createdAt']) &&
+        data.roomCode == roomId &&
+        validRoomId(data.roomCode) &&
+        data.hostId == request.auth.uid &&
+        validUid(data.hostId) &&
+        validName(data.hostName) &&
+        validWord(data.startWord) &&
+        data.mode in ['DISCOVERY', 'TARGET'] &&
+        data.status == 'WAITING' &&
+        data.timeLimitSeconds in [120, 300, 600] &&
+        data.createdAt == request.time &&
+        (
+          (data.mode == 'DISCOVERY' && !('targetWord' in data)) ||
+          (data.mode == 'TARGET' && validWord(data.targetWord) && data.targetWord.size() == data.startWord.size())
+        );
+    }
+
+    function roomImmutableFieldsUnchanged() {
+      return request.resource.data.roomCode == resource.data.roomCode &&
+        request.resource.data.hostId == resource.data.hostId &&
+        request.resource.data.hostName == resource.data.hostName &&
+        request.resource.data.startWord == resource.data.startWord &&
+        request.resource.data.mode == resource.data.mode &&
+        request.resource.data.timeLimitSeconds == resource.data.timeLimitSeconds &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        (
+          (!('targetWord' in resource.data) && !('targetWord' in request.resource.data)) ||
+          request.resource.data.targetWord == resource.data.targetWord
+        );
+    }
+
+    function isHostStartUpdate() {
+      return request.auth.uid == resource.data.hostId &&
+        resource.data.status == 'WAITING' &&
+        request.resource.data.status == 'ACTIVE' &&
+        request.resource.data.startedAt == request.time &&
+        !('endedAt' in request.resource.data) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'startedAt']);
+    }
+
+    function isHostResetUpdate() {
+      return request.auth.uid == resource.data.hostId &&
+        resource.data.status in ['WAITING', 'ACTIVE', 'ENDED'] &&
+        request.resource.data.status == 'WAITING' &&
+        !('startedAt' in request.resource.data) &&
+        !('endedAt' in request.resource.data) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'startedAt', 'endedAt']);
+    }
+
+    function isHostNewRoundUpdate() {
+      return request.auth.uid == resource.data.hostId &&
+        resource.data.status in ['ACTIVE', 'ENDED'] &&
+        request.resource.data.status == 'ACTIVE' &&
+        request.resource.data.startedAt == request.time &&
+        !('endedAt' in request.resource.data) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'startedAt', 'endedAt']);
+    }
+
+    function isHostEndUpdate() {
+      return request.auth.uid == resource.data.hostId &&
+        resource.data.status in ['WAITING', 'ACTIVE'] &&
+        request.resource.data.status == 'ENDED' &&
+        request.resource.data.endedAt == request.time &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'endedAt']);
+    }
+
+    function isTargetCompletionUpdate(roomId) {
+      return resource.data.mode == 'TARGET' &&
+        resource.data.status == 'ACTIVE' &&
+        validWord(resource.data.targetWord) &&
+        request.resource.data.status == 'ENDED' &&
+        request.resource.data.endedAt == request.time &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'endedAt']) &&
+        getAfter(playerWordPath(roomId, request.auth.uid, resource.data.targetWord)).data.playerId == request.auth.uid &&
+        getAfter(playerWordPath(roomId, request.auth.uid, resource.data.targetWord)).data.word == resource.data.targetWord;
+    }
+
+    function isValidRoomUpdate(roomId) {
+      return hasOnlyAllowedFields(request.resource.data, ['roomCode', 'hostId', 'hostName', 'startWord', 'targetWord', 'mode', 'status', 'timeLimitSeconds', 'createdAt', 'startedAt', 'endedAt']) &&
+        roomImmutableFieldsUnchanged() &&
+        ((isHostStartUpdate() || isHostResetUpdate() || isHostNewRoundUpdate() || isHostEndUpdate()) || isTargetCompletionUpdate(roomId));
+    }
+
+    function isValidPlayerCreate(roomId, playerId, data) {
+      return roomExists(roomId) &&
+        roomData(roomId).status in ['WAITING', 'ACTIVE'] &&
+        hasRequiredFields(data, ['playerId', 'name', 'joinedAt', 'isHost', 'isOnline', 'lastSeenAt']) &&
+        hasOnlyAllowedFields(data, ['playerId', 'name', 'joinedAt', 'isHost', 'isOnline', 'lastSeenAt', 'uniqueWordsDiscovered', 'totalWordsSubmitted']) &&
+        isOwner(playerId) &&
+        uidUnchanged('playerId') &&
+        validName(data.name) &&
+        data.joinedAt == request.time &&
+        data.isHost == (roomData(roomId).hostId == playerId) &&
+        validPlayerPresence(data) &&
+        validOptionalLegacyCount(data, 'uniqueWordsDiscovered') &&
+        validOptionalLegacyCount(data, 'totalWordsSubmitted');
+    }
+
+    function isValidPlayerUpdate(roomId, playerId) {
+      return roomExists(roomId) &&
+        isOwner(playerId) &&
+        hasRequiredFields(request.resource.data, ['playerId', 'name', 'joinedAt', 'isHost', 'isOnline', 'lastSeenAt']) &&
+        hasOnlyAllowedFields(request.resource.data, ['playerId', 'name', 'joinedAt', 'isHost', 'isOnline', 'lastSeenAt', 'uniqueWordsDiscovered', 'totalWordsSubmitted']) &&
+        uidNotModified('playerId') &&
+        request.resource.data.joinedAt == resource.data.joinedAt &&
+        request.resource.data.isHost == (roomData(roomId).hostId == playerId) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'isHost', 'isOnline', 'lastSeenAt']) &&
+        validName(request.resource.data.name) &&
+        validPlayerPresence(request.resource.data) &&
+        validOptionalLegacyCount(request.resource.data, 'uniqueWordsDiscovered') &&
+        validOptionalLegacyCount(request.resource.data, 'totalWordsSubmitted');
+    }
+
+    function isValidPlayerWordCreate(roomId, playerId, wordId, data) {
+      return roomExists(roomId) &&
+        roomData(roomId).status == 'ACTIVE' &&
+        isOwner(playerId) &&
+        exists(playerPath(roomId, playerId)) &&
+        !exists(playerWordPath(roomId, playerId, wordId)) &&
+        hasRequiredFields(data, ['word', 'playerId', 'playerName', 'parentWord', 'submittedAt']) &&
+        hasOnlyAllowedFields(data, ['word', 'playerId', 'playerName', 'parentWord', 'dictionary', 'submittedAt']) &&
+        data.word == wordId &&
+        validWord(data.word) &&
+        data.playerId == playerId &&
+        validName(data.playerName) &&
+        validWord(data.parentWord) &&
+        data.submittedAt == request.time &&
+        validDictionary(data);
+    }
+
+    function isValidDiscoveredWordCreate(roomId, wordId, data) {
+      return roomExists(roomId) &&
+        roomData(roomId).status == 'ACTIVE' &&
+        !exists(/databases/$(database)/documents/rooms/$(roomId)/words/$(wordId)) &&
+        hasRequiredFields(data, ['word', 'firstDiscoveredBy', 'firstDiscoveredByName', 'discoveredAt']) &&
+        hasOnlyAllowedFields(data, ['word', 'firstDiscoveredBy', 'firstDiscoveredByName', 'firstDiscoveredParentWord', 'dictionary', 'discoveredAt']) &&
+        data.word == wordId &&
+        validWord(data.word) &&
+        data.firstDiscoveredBy == request.auth.uid &&
+        validName(data.firstDiscoveredByName) &&
+        (!('firstDiscoveredParentWord' in data) || validWord(data.firstDiscoveredParentWord)) &&
+        data.discoveredAt == request.time &&
+        validDictionary(data) &&
+        getAfter(playerWordPath(roomId, request.auth.uid, wordId)).data.word == wordId &&
+        getAfter(playerWordPath(roomId, request.auth.uid, wordId)).data.playerId == request.auth.uid;
+    }
+
+    match /rooms/{roomId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidRoomCreate(roomId, request.resource.data);
+      allow update: if isAuthenticated() && isValidRoomUpdate(roomId);
+      allow delete: if false;
+
+      match /players/{playerId} {
+        allow read: if isRoomParticipant(roomId);
+        allow create: if isAuthenticated() && isValidPlayerCreate(roomId, playerId, request.resource.data);
+        allow update: if isAuthenticated() && isValidPlayerUpdate(roomId, playerId);
+        allow delete: if false;
+
+        match /words/{wordId} {
+          allow read: if isRoomParticipant(roomId);
+          allow create: if isAuthenticated() && isValidPlayerWordCreate(roomId, playerId, wordId, request.resource.data);
+          allow update: if false;
+          allow delete: if isRoomHost(roomId);
+        }
+      }
+
+      match /words/{wordId} {
+        allow read: if isRoomParticipant(roomId);
+        allow create: if isAuthenticated() && isValidDiscoveredWordCreate(roomId, wordId, request.resource.data);
+        allow update: if false;
+        allow delete: if isRoomHost(roomId);
+      }
+    }
+
+    match /gameStats/{gameId} {
+      allow read: if isAuthenticated();
+      allow write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

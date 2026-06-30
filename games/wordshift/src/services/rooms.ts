@@ -1,9 +1,10 @@
 import {
   collection,
+  deleteField,
   doc,
+  getDocs,
   getDoc,
   getDocFromServer,
-  increment,
   onSnapshot,
   orderBy,
   query,
@@ -11,6 +12,9 @@ import {
   serverTimestamp,
   setDoc,
   updateDoc,
+  writeBatch,
+  type Firestore,
+  type QueryDocumentSnapshot,
   type Unsubscribe,
 } from "firebase/firestore";
 import { getFirebaseServices } from "@platform/lib/firebase";
@@ -22,6 +26,7 @@ import { getRoomTimeRemainingSeconds } from "../utils/time";
 import { normalizeWord, validateSubmittedWord } from "../utils/wordRules";
 
 const WORDSHIFT_GAME_ID = "wordshift";
+const BATCH_WRITE_LIMIT = 450;
 
 export interface CreateRoomInput {
   hostId: string;
@@ -64,11 +69,13 @@ export async function createRoom(input: CreateRoomInput) {
     name: input.hostName.trim(),
     joinedAt: serverTimestamp(),
     isHost: true,
+    isOnline: true,
+    lastSeenAt: serverTimestamp(),
     uniqueWordsDiscovered: 0,
     totalWordsSubmitted: 0,
   });
 
-  await recordGameRoomCreated(db, WORDSHIFT_GAME_ID);
+  await recordGameRoomCreated(db, WORDSHIFT_GAME_ID).catch(() => undefined);
 
   return roomCode;
 }
@@ -83,47 +90,118 @@ export async function joinRoom(roomId: string, playerId: string, name: string) {
   const room = roomSnap.data() as Room;
   if (room.status === "ENDED") throw new Error("Game already ended.");
   if (room.status === "ACTIVE" && getRoomTimeRemainingSeconds(room) <= 0) {
-    await updateDoc(roomRef, {
-      status: "ENDED",
-      endedAt: serverTimestamp(),
-    });
+    if (room.hostId === playerId) {
+      await updateDoc(roomRef, {
+        status: "ENDED",
+        endedAt: serverTimestamp(),
+      });
+    }
     throw new Error("Game already ended.");
   }
 
   const playerRef = doc(db, "rooms", normalizedRoomId, "players", playerId);
   const playerSnap = await getDoc(playerRef);
-  await setDoc(
-    playerRef,
-    {
+
+  if (playerSnap.exists()) {
+    await updateDoc(playerRef, {
+      name: name.trim(),
+      isHost: room.hostId === playerId,
+      isOnline: true,
+      lastSeenAt: serverTimestamp(),
+    });
+  } else {
+    await setDoc(playerRef, {
       playerId,
       name: name.trim(),
       joinedAt: serverTimestamp(),
       isHost: room.hostId === playerId,
-      ...(playerSnap.exists() ? {} : { uniqueWordsDiscovered: 0, totalWordsSubmitted: 0 }),
-    },
-    { merge: true },
-  );
+      isOnline: true,
+      lastSeenAt: serverTimestamp(),
+      uniqueWordsDiscovered: 0,
+      totalWordsSubmitted: 0,
+    });
+  }
 
   if (!playerSnap.exists()) {
-    await recordGamePlayerJoined(db, WORDSHIFT_GAME_ID);
+    await recordGamePlayerJoined(db, WORDSHIFT_GAME_ID).catch(() => undefined);
   }
 
   return normalizedRoomId;
 }
 
-export async function startGame(roomId: string) {
+export async function updatePlayerPresence(roomId: string, playerId: string, isOnline: boolean) {
   const { db } = getFirebaseServices();
-  await updateDoc(doc(db, "rooms", roomId), {
-    status: "ACTIVE",
-    startedAt: serverTimestamp(),
+  await updateDoc(doc(db, "rooms", roomId, "players", playerId), {
+    isOnline,
+    lastSeenAt: serverTimestamp(),
   });
 }
 
-export async function endGame(roomId: string) {
+async function commitDeletes(db: Firestore, docs: QueryDocumentSnapshot[]) {
+  for (let index = 0; index < docs.length; index += BATCH_WRITE_LIMIT) {
+    const batch = writeBatch(db);
+    docs.slice(index, index + BATCH_WRITE_LIMIT).forEach((docSnap) => {
+      batch.delete(docSnap.ref);
+    });
+    await batch.commit();
+  }
+}
+
+async function clearRoundWords(db: Firestore, roomId: string) {
+  const roomWords = await getDocs(collection(db, "rooms", roomId, "words"));
+  const players = await getDocs(collection(db, "rooms", roomId, "players"));
+  const playerWordsByPlayer = await Promise.all(players.docs.map((playerDoc) => getDocs(collection(playerDoc.ref, "words"))));
+
+  await commitDeletes(db, [...roomWords.docs, ...playerWordsByPlayer.flatMap((snapshot) => snapshot.docs)]);
+}
+
+export async function resetRoom(roomId: string, playerId: string, startImmediately = false) {
   const { db } = getFirebaseServices();
-  await updateDoc(doc(db, "rooms", roomId), {
-    status: "ENDED",
-    endedAt: serverTimestamp(),
+  const roomRef = doc(db, "rooms", roomId);
+  const roomSnap = await getDoc(roomRef);
+  if (!roomSnap.exists()) throw new Error("Room not found.");
+  const room = roomSnap.data() as Room;
+  if (room.hostId !== playerId) throw new Error("Only the host can reset the room.");
+
+  await clearRoundWords(db, roomId);
+  await updateDoc(roomRef, {
+    status: startImmediately ? "ACTIVE" : "WAITING",
+    startedAt: startImmediately ? serverTimestamp() : deleteField(),
+    endedAt: deleteField(),
+  });
+}
+
+export async function startGame(roomId: string, playerId: string) {
+  const { db } = getFirebaseServices();
+  await runTransaction(db, async (transaction) => {
+    const roomRef = doc(db, "rooms", roomId);
+    const roomSnap = await transaction.get(roomRef);
+    if (!roomSnap.exists()) throw new Error("Room not found.");
+    const room = roomSnap.data() as Room;
+    if (room.hostId !== playerId) throw new Error("Only the host can start the game.");
+    if (room.status !== "WAITING") throw new Error("Game cannot be started now.");
+
+    transaction.update(roomRef, {
+      status: "ACTIVE",
+      startedAt: serverTimestamp(),
+    });
+  });
+}
+
+export async function endGame(roomId: string, playerId: string) {
+  const { db } = getFirebaseServices();
+  await runTransaction(db, async (transaction) => {
+    const roomRef = doc(db, "rooms", roomId);
+    const roomSnap = await transaction.get(roomRef);
+    if (!roomSnap.exists()) throw new Error("Room not found.");
+    const room = roomSnap.data() as Room;
+    if (room.hostId !== playerId) throw new Error("Only the host can end the game.");
+    if (room.status === "ENDED") return;
+
+    transaction.update(roomRef, {
+      status: "ENDED",
+      endedAt: serverTimestamp(),
+    });
   });
 }
 
@@ -164,33 +242,17 @@ export async function submitWord(
   await runTransaction(db, async (transaction) => {
     const roomRef = doc(db, "rooms", roomId);
     const roomSnap = await transaction.get(roomRef);
-    const playerSnap = await transaction.get(playerRef);
     const playerWordSnap = await transaction.get(playerWordRef);
     const discoveredWordSnap = await transaction.get(discoveredWordRef);
     if (!roomSnap.exists()) throw new Error("Room not found.");
+    const playerSnap = await transaction.get(playerRef);
+    if (!playerSnap.exists()) throw new Error("Join this room before submitting words.");
     const latestRoom = roomSnap.data() as Room;
     if (latestRoom.status !== "ACTIVE") throw new Error("Game already ended.");
     if (getRoomTimeRemainingSeconds(latestRoom) <= 0) {
-      transaction.update(roomRef, {
-        status: "ENDED",
-        endedAt: serverTimestamp(),
-      });
       throw new Error("Game already ended.");
     }
     if (playerWordSnap.exists()) throw new Error("Word already submitted.");
-
-    transaction.set(
-      playerRef,
-      {
-        playerId: player.playerId,
-        name: player.name,
-        ...(playerSnap.exists() ? {} : { joinedAt: serverTimestamp() }),
-        isHost: latestRoom.hostId === player.playerId,
-        uniqueWordsDiscovered: increment(0),
-        totalWordsSubmitted: increment(0),
-      },
-      { merge: true },
-    );
 
     transaction.set(playerWordRef, {
       word,
@@ -200,13 +262,6 @@ export async function submitWord(
       dictionary,
       submittedAt: serverTimestamp(),
     });
-
-    const scoreUpdates = {
-      totalWordsSubmitted: increment(1),
-      ...(discoveredWordSnap.exists() ? {} : { uniqueWordsDiscovered: increment(1) }),
-    };
-
-    transaction.set(playerRef, scoreUpdates, { merge: true });
 
     if (!discoveredWordSnap.exists()) {
       transaction.set(discoveredWordRef, {

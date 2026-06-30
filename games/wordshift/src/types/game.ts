@@ -22,6 +22,8 @@ export interface Player {
   name: string;
   joinedAt: Timestamp;
   isHost: boolean;
+  isOnline?: boolean;
+  lastSeenAt?: Timestamp;
   uniqueWordsDiscovered?: number;
   totalWordsSubmitted?: number;
 }

@@ -23,9 +23,18 @@ jobs:
       - run: npm ci
       - run: npm run build
 
-      - uses: FirebaseExtended/action-hosting-deploy@v0
-        with:
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_HEYJUSTPLAY_AA34C }}
-          channelId: live
-          projectId: heyjustplay-aa34c
+      - name: Deploy to Firebase Hosting
+        run: |
+          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_HEYJUSTPLAY_AA34C }}' > "$HOME/firebase-service-account.json"
+          export GOOGLE_APPLICATION_CREDENTIALS="$HOME/firebase-service-account.json"
+
+          set +e
+          npx firebase-tools@latest deploy --only hosting --project heyjustplay-aa34c --non-interactive 2>&1 | tee deploy.log
+          EXIT_CODE=${PIPESTATUS[0]}
+
+          if grep -q "is the current active version" deploy.log; then
+            echo "Firebase already released this version. Treating as success."
+            exit 0
+          fi
+
+          exit $EXIT_CODE

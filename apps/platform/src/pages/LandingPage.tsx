@@ -4,6 +4,8 @@ import type { GameStats } from "@packages/shared/src";
 import { getGameCatalogEntry } from "../games/catalog";
 import { getEnabledGameStats } from "../services/gameStats";
 
+const MOST_PLAYED_LIMIT = 8;
+
 function formatRooms(count: number) {
   return `${count.toLocaleString()} ${count === 1 ? "room" : "rooms"}`;
 }
@@ -13,11 +15,64 @@ function formatAveragePlayers(average: number) {
   return `Avg ${formattedAverage} ${average === 1 ? "player" : "players"}`;
 }
 
+function GameTile({ game, compact = false, showBadge = false }: { game: GameStats; compact?: boolean; showBadge?: boolean }) {
+  const catalogEntry = getGameCatalogEntry(game.gameId);
+  const route = catalogEntry?.route ?? "/";
+  const accentLetters = catalogEntry?.accentLetters ?? game.displayName.slice(0, 9).toUpperCase().split("");
+
+  return (
+    <Link
+      to={route}
+      aria-label={`Open ${game.displayName}`}
+      className={`group grid content-between overflow-hidden rounded-lg border border-line bg-card shadow-2xl shadow-black/20 transition hover:-translate-y-0.5 hover:border-mint/70 hover:bg-ink/80 focus:outline-none focus:ring-2 focus:ring-mint focus:ring-offset-2 focus:ring-offset-ink ${
+        compact ? "min-h-[20rem]" : "min-h-[25rem] w-[18rem] shrink-0 snap-start sm:w-[21rem]"
+      }`}
+    >
+      <div className="grid gap-4 p-5">
+        <div className="grid aspect-[1.25] place-items-center rounded-lg border border-line bg-ink/60">
+          <div className="grid grid-cols-3 gap-1">
+            {accentLetters.map((letter, index) => (
+              <span
+                key={`${letter}-${index}`}
+                className="grid size-10 place-items-center rounded-md bg-white/10 font-mono text-sm font-black text-mint transition group-hover:bg-mint group-hover:text-ink"
+              >
+                {letter}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <div className="flex items-start justify-between gap-3">
+            <h3 className="text-2xl font-black text-white">{game.displayName}</h3>
+            {showBadge ? (
+              <span className="rounded-md bg-coral/20 px-2 py-1 text-xs font-black uppercase text-rose-100">Most played</span>
+            ) : null}
+          </div>
+          <p className="mt-2 text-sm font-semibold leading-6 text-slate-300">{game.description}</p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <div className="rounded-lg border border-line bg-ink/55 p-3">
+            <p className="text-xs font-bold uppercase text-slate-400">Rooms</p>
+            <p className="mt-1 font-mono text-lg font-black text-white">{formatRooms(game.totalRoomsCreated)}</p>
+          </div>
+          <div className="rounded-lg border border-line bg-ink/55 p-3">
+            <p className="text-xs font-bold uppercase text-slate-400">Players</p>
+            <p className="mt-1 font-mono text-lg font-black text-white">{formatAveragePlayers(game.averagePlayersPerRoom)}</p>
+          </div>
+        </div>
+      </div>
+    </Link>
+  );
+}
+
 export function LandingPage() {
   const [searchParams] = useSearchParams();
   const [games, setGames] = useState<GameStats[]>([]);
   const [loadingGames, setLoadingGames] = useState(true);
   const inviteRoomCode = searchParams.get("room")?.trim().toUpperCase();
+  const mostPlayedGames = games.slice(0, MOST_PLAYED_LIMIT);
 
   useEffect(() => {
     let ignore = false;
@@ -53,7 +108,7 @@ export function LandingPage() {
         <div className="flex items-end justify-between gap-4">
           <div>
             <p className="text-sm font-bold uppercase tracking-[0.22em] text-coral">Popular with teams</p>
-            <h2 className="mt-2 text-3xl font-black text-white">Most Played Games</h2>
+            <h2 className="mt-2 text-3xl font-black text-white">Most Played</h2>
           </div>
           <span className="hidden rounded-md border border-line bg-white/10 px-3 py-2 text-xs font-black uppercase text-slate-200 sm:inline-flex">Most played</span>
         </div>
@@ -66,63 +121,36 @@ export function LandingPage() {
           <div className="rounded-lg border border-line bg-card p-5 text-sm font-semibold text-slate-300">No games are available yet.</div>
         ) : null}
 
-        {games.length ? (
+        {mostPlayedGames.length ? (
           <div className="-mx-4 overflow-x-auto px-4 pb-3 sm:mx-0 sm:px-0">
             <div className="flex min-w-full snap-x gap-4">
-              {games.map((game) => {
-                const catalogEntry = getGameCatalogEntry(game.gameId);
-                const route = catalogEntry?.route ?? "/";
-                const accentLetters = catalogEntry?.accentLetters ?? game.displayName.slice(0, 9).toUpperCase().split("");
-
-                return (
-                  <article
-                    key={game.gameId}
-                    className="group grid min-h-[25rem] w-[18rem] shrink-0 snap-start content-between overflow-hidden rounded-lg border border-line bg-card shadow-2xl shadow-black/20 transition hover:border-mint/70 hover:bg-ink/80 sm:w-[21rem]"
-                  >
-                    <div className="grid gap-4 p-5">
-                      <div className="grid aspect-[1.25] place-items-center rounded-lg border border-line bg-ink/60">
-                        <div className="grid grid-cols-3 gap-1">
-                          {accentLetters.map((letter, index) => (
-                            <span
-                              key={`${letter}-${index}`}
-                              className="grid size-10 place-items-center rounded-md bg-white/10 font-mono text-sm font-black text-mint"
-                            >
-                              {letter}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-
-                      <div>
-                        <div className="flex items-start justify-between gap-3">
-                          <h3 className="text-2xl font-black text-white">{game.displayName}</h3>
-                          <span className="rounded-md bg-coral/20 px-2 py-1 text-xs font-black uppercase text-rose-100">Trending now</span>
-                        </div>
-                        <p className="mt-2 text-sm font-semibold leading-6 text-slate-300">{game.description}</p>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2">
-                        <div className="rounded-lg border border-line bg-ink/55 p-3">
-                          <p className="text-xs font-bold uppercase text-slate-400">Rooms</p>
-                          <p className="mt-1 font-mono text-lg font-black text-white">{formatRooms(game.totalRoomsCreated)}</p>
-                        </div>
-                        <div className="rounded-lg border border-line bg-ink/55 p-3">
-                          <p className="text-xs font-bold uppercase text-slate-400">Players</p>
-                          <p className="mt-1 font-mono text-lg font-black text-white">{formatAveragePlayers(game.averagePlayersPerRoom)}</p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <Link
-                      to={route}
-                      className="m-5 mt-0 min-h-12 rounded-lg bg-mint px-5 py-3 text-center text-sm font-black uppercase text-ink transition group-hover:bg-emerald-300"
-                    >
-                      Play Now
-                    </Link>
-                  </article>
-                );
-              })}
+              {mostPlayedGames.map((game) => (
+                <GameTile key={game.gameId} game={game} showBadge />
+              ))}
             </div>
+          </div>
+        ) : null}
+      </section>
+
+      <section className="grid gap-4 pb-8 sm:pb-14">
+        <div>
+          <p className="text-sm font-bold uppercase tracking-[0.22em] text-mint">Browse the library</p>
+          <h2 className="mt-2 text-3xl font-black text-white">All Games</h2>
+        </div>
+
+        {loadingGames ? (
+          <div className="rounded-lg border border-line bg-card p-5 text-sm font-semibold text-slate-300">Loading games...</div>
+        ) : null}
+
+        {!loadingGames && !games.length ? (
+          <div className="rounded-lg border border-line bg-card p-5 text-sm font-semibold text-slate-300">No games are available yet.</div>
+        ) : null}
+
+        {games.length ? (
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {games.map((game) => (
+              <GameTile key={game.gameId} game={game} compact />
+            ))}
           </div>
         ) : null}
       </section>
